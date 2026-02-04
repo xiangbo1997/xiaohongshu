@@ -39,3 +39,35 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/src/generated/prisma
+
+# Project specific
+backups/
+exports/
+logs/
+reports/
+*.csv
+*.sql
+*.sql.gz
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test artifacts
+test-results/
+playwright-report/
+.vitest/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Sensitive data
+credentials.json
+secrets.json

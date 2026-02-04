@@ -1,0 +1,282 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// 用户表
+model User {
+  id        String   @id @default(cuid())
+  phone     String?  @unique
+  email     String?  @unique
+  password  String
+  nickname  String?
+  avatar    String?
+
+  // 会员信息
+  memberType    MemberType @default(FREE)
+  memberExpire  DateTime?
+
+  // 点数系统
+  points           Int      @default(0)    // 购买/兑换的点数（永久有效）
+  todayUsage       Int      @default(0)    // 今日已使用次数（兼容旧字段，将迁移到 dailyFreeUsed）
+  dailyFreeUsed    Int      @default(0)    // 今日已使用的免费点数
+  totalUsage       Int      @default(0)    // 总使用次数
+  lastUsageDate    DateTime @default(now()) // 最后使用日期（用于重置每日免费点数）
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 关联
+  generations        Generation[]
+  favorites          Favorite[]
+  orders             Order[]
+  redemptionRecords  RedemptionRecord[]
+  pointRecords       PointRecord[]      // 点数变动记录
+}
+
+enum MemberType {
+  FREE      // 免费用户
+  VIP       // VIP 会员（统一类型，通过 memberExpire 控制时长）
+}
+
+// 生成记录表
+model Generation {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  // 输入参数
+  contentType   String   // 种草、教程、生活
+  category      String?  // 垂类：美妆、美食等
+  topic         String   // 主题
+  keywords      String?  // 关键词
+  style         String?  // 风格
+  aiProvider    String   // AI提供商
+
+  // 生成结果
+  title     String
+  content   String   @db.Text
+  tags      String[] // 话题标签
+  coverText String?  // 封面文案
+
+  createdAt DateTime @default(now())
+
+  favorites Favorite[]
+}
+
+// 收藏表
+model Favorite {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id])
+  generationId String
+  generation   Generation @relation(fields: [generationId], references: [id])
+  createdAt    DateTime   @default(now())
+
+  @@unique([userId, generationId])
+}
+
+// 订单表
+model Order {
+  id          String      @id @default(cuid())
+  orderNo     String      @unique
+  userId      String
+  user        User        @relation(fields: [userId], references: [id])
+
+  productType ProductType // 购买的产品类型
+  productName String?     // 产品名称
+  quantity    Int         @default(1)  // 数量（点数卡时为点数数量，VIP 时为天数）
+  amount      Int         // 金额（分）
+  status      OrderStatus @default(PENDING)
+
+  // 支付信息
+  payType     String?     // 支付方式
+  tradeNo     String?     // 第三方交易号
+  paidAt      DateTime?
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+enum ProductType {
+  VIP_1       // 1天VIP
+  VIP_3       // 3天VIP
+  VIP_7       // 7天VIP
+  VIP_30      // 30天VIP
+  POINTS_10   // 10点数
+  POINTS_50   // 50点数
+  POINTS_100  // 100点数
+  POINTS_500  // 500点数
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+// 爆款模板表
+model Template {
+  id          String   @id @default(cuid())
+  name        String
+  contentType String   // 种草、教程、生活
+  category    String?  // 垂类
+
+  titleTemplate   String   // 标题模板
+  contentTemplate String   @db.Text // 内容模板
+
+  isHot       Boolean  @default(false)
+  useCount    Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// 系统设置表
+model Settings {
+  id    String @id @default(cuid())
+  key   String @unique  // 设置键名
+  value String @db.Text // 设置值（JSON 格式存储复杂配置）
+  desc  String?         // 描述
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// AI 提供商配置表
+model AIConfig {
+  id        String  @id @default(cuid())
+  provider  String  @unique  // openai, claude, deepseek, zhipu
+  name      String           // 显示名称
+  model     String           // 模型名称
+  apiKey    String?          // API Key（加密存储）
+  baseUrl   String?          // API Base URL
+  enabled   Boolean @default(true)  // 是否启用
+  sortOrder Int     @default(0)     // 排序
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 系统日志表
+model Log {
+  id        String   @id @default(cuid())
+  level     String   // info, warn, error
+  type      String   // generate, auth, payment, system
+  message   String
+  details   String?  @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([type])
+  @@index([level])
+  @@index([createdAt])
+}
+
+// 兑换码表
+model RedemptionCode {
+  id            String           @id @default(cuid())
+  code          String           @unique  // 兑换码（加密存储，内部使用）
+  codeDisplay   String           @unique  // 显示用兑换码（XXXX-XXXX-XXXX-XXXX）
+  codeCategory  CodeCategory     @default(VIP)  // 兑换码类别：VIP天数 或 点数
+  rewardType    RewardType                // 奖励类型
+  rewardValue   Int                       // 奖励值（VIP天数 或 点数数量）
+  status        RedemptionStatus  @default(ACTIVE)
+  maxUses       Int              @default(1)  // 最大使用次数
+  usedCount     Int              @default(0)  // 已使用次数
+  expireAt      DateTime?                    // 过期时间
+  note          String?                     // 备注（管理员可见）
+  createdBy     String?                     // 创建者管理员 ID
+  createdAt     DateTime         @default(now())
+
+  // 关联使用记录
+  records       RedemptionRecord[]
+
+  @@index([status])
+  @@index([codeDisplay])
+  @@index([codeCategory])
+}
+
+// 兑换码类别
+enum CodeCategory {
+  VIP       // VIP 天数兑换码
+  POINTS    // 点数兑换码
+}
+
+enum RewardType {
+  VIP_1     // 1天VIP
+  VIP_3     // 3天VIP
+  VIP_7     // 7天VIP
+  VIP_30    // 30天VIP
+  VIP_CUSTOM // 自定义VIP天数
+  POINTS_10   // 10点数
+  POINTS_50   // 50点数
+  POINTS_100  // 100点数
+  POINTS_CUSTOM // 自定义点数
+}
+
+enum RedemptionStatus {
+  ACTIVE      // 有效
+  EXPIRED     // 已过期
+  DEPLETED    // 已用完
+  DISABLED    // 已禁用
+}
+
+// 兑换记录表
+model RedemptionRecord {
+  id              String           @id @default(cuid())
+  codeId          String
+  redemptionCode  RedemptionCode   @relation(fields: [codeId], references: [id])
+  code            String           // 冗余存储兑换码
+  userId          String
+  user            User             @relation(fields: [userId], references: [id])
+  rewardType      RewardType
+  rewardValue     Int
+  redeemedAt      DateTime         @default(now())
+
+  @@unique([codeId, userId])  // 防止同一用户重复兑换同一码
+  @@index([userId])
+  @@index([codeId])
+}
+
+// 点数变动记录表
+model PointRecord {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id])
+
+  type        PointType   // 变动类型
+  amount      Int         // 变动数量（正数增加，负数减少）
+  balance     Int         // 变动后余额
+  description String?     // 描述
+  relatedId   String?     // 关联 ID（订单号、兑换码等）
+
+  createdAt   DateTime    @default(now())
+
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+enum PointType {
+  PURCHASE    // 购买点数
+  REDEEM      // 兑换码兑换
+  CONSUME     // 消费使用
+  GIFT        // 系统赠送
+  REFUND      // 退款返还
+  EXPIRE      // 过期扣除
+}
+
+// VIP 套餐配置（用于后台管理）
+enum VipDuration {
+  DAY_1       // 1天
+  DAY_3       // 3天
+  DAY_7       // 7天
+  DAY_30      // 30天
+}
+

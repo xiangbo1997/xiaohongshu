@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
         prisma.user.update({
           where: { id: order.userId },
           data: {
-            memberType: order.productType,
+            memberType: 'VIP',
             memberExpire: expireDate,
           },
         }),

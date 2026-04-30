@@ -161,15 +161,57 @@ EOF
     fi
 }
 
-# 安装生产依赖（不构建）
+# 安装依赖并生成 Prisma 客户端
 install_deps() {
-    log_info "安装生产依赖..."
+    log_info "安装依赖..."
     cd ${PROJECT_DIR}
 
-    # 只安装生产依赖，不执行构建
-    pnpm install --prod --frozen-lockfile 2>/dev/null || pnpm install --prod
+    # 安装所有依赖（包括 Prisma CLI，用于生成客户端）
+    pnpm install --frozen-lockfile 2>/dev/null || pnpm install || npm install
+
+    # 【关键】在服务器重新生成 Prisma 客户端
+    # 原因：Prisma 客户端包含平台特定的二进制文件
+    # 本地 Mac 构建的客户端无法在 Linux 服务器运行
+    if [ -d "prisma" ]; then
+        log_info "生成 Prisma 客户端（Linux 平台）..."
+        npx prisma generate
+        log_info "Prisma 客户端生成完成"
+    fi
 
     log_info "依赖安装完成"
+}
+
+# 修复 Turbopack 构建的依赖问题
+fix_turbopack_deps() {
+    log_info "修复 Turbopack 构建依赖..."
+    cd ${PROJECT_DIR}
+
+    # 从构建文件中提取哈希化的依赖名
+    if [ -d ".next/server/chunks" ]; then
+        # 查找 @prisma/client 的哈希版本
+        PRISMA_HASH=$(grep -ohE '@prisma/client-[a-f0-9]{16}' .next/server/chunks/*.js 2>/dev/null | head -1 | sed 's/@prisma\///')
+        if [ -n "$PRISMA_HASH" ]; then
+            log_info "创建 Prisma 客户端符号链接: $PRISMA_HASH"
+            ln -sf client node_modules/@prisma/$PRISMA_HASH 2>/dev/null || true
+
+            # 创建 query_compiler_fast 符号链接
+            if [ -d "node_modules/@prisma/client/runtime" ]; then
+                cd node_modules/@prisma/client/runtime
+                ln -sf query_compiler_bg.postgresql.mjs query_compiler_fast_bg.postgresql.mjs 2>/dev/null || true
+                ln -sf query_compiler_bg.postgresql.wasm-base64.mjs query_compiler_fast_bg.postgresql.wasm-base64.mjs 2>/dev/null || true
+                cd ${PROJECT_DIR}
+            fi
+        fi
+
+        # 查找 pg 的哈希版本
+        PG_HASH=$(grep -ohE 'pg-[a-f0-9]{16}' .next/server/chunks/*.js 2>/dev/null | head -1)
+        if [ -n "$PG_HASH" ]; then
+            log_info "创建 pg 符号链接: $PG_HASH"
+            ln -sf pg node_modules/$PG_HASH 2>/dev/null || true
+        fi
+    fi
+
+    log_info "Turbopack 依赖修复完成"
 }
 
 # 数据库迁移
@@ -276,6 +318,7 @@ install_deploy() {
     check_files || return 1
     setup_env || return 1
     install_deps
+    fix_turbopack_deps
     create_pm2_config
     migrate_db
     start_app
@@ -304,6 +347,9 @@ update_deploy() {
 
     # 重新安装依赖
     install_deps
+
+    # 修复 Turbopack 依赖
+    fix_turbopack_deps
 
     # 数据库迁移
     migrate_db

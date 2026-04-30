@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
-import { getUserFromCookie } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { REWARD_TYPE_LABELS } from '@/lib/redemption'
 
 // 获取用户的兑换历史
 export async function GET(req: NextRequest) {
   try {
     // 验证用户登录
-    const user = await getUserFromCookie(req)
+    const user = await getCurrentUser()
     if (!user) {
       return NextResponse.json({ error: '请先登录' }, { status: 401 })
     }

@@ -5,9 +5,10 @@ import { getAdminSession } from '@/lib/admin-auth'
 // 修改兑换码（禁用/修改备注）
 export async function PUT(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     // 验证管理员权限
     const { isAdmin } = await getAdminSession()
     if (!isAdmin) {
@@ -19,7 +20,7 @@ export async function PUT(
 
     // 查询兑换码
     const code = await prisma.redemptionCode.findUnique({
-      where: { id: params.id },
+      where: { id },
     })
 
     if (!code) {
@@ -36,7 +37,7 @@ export async function PUT(
     }
 
     const updated = await prisma.redemptionCode.update({
-      where: { id: params.id },
+      where: { id },
       data: updateData,
       select: {
         id: true,
@@ -62,9 +63,10 @@ export async function PUT(
 // 删除兑换码
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     // 验证管理员权限
     const { isAdmin } = await getAdminSession()
     if (!isAdmin) {
@@ -73,7 +75,7 @@ export async function DELETE(
 
     // 检查兑换码是否存在
     const code = await prisma.redemptionCode.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         _count: {
           select: { records: true },
@@ -95,7 +97,7 @@ export async function DELETE(
 
     // 删除兑换码
     await prisma.redemptionCode.delete({
-      where: { id: params.id },
+      where: { id },
     })
 
     return NextResponse.json({ success: true })

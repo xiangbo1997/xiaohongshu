@@ -66,11 +66,12 @@ install_deps() {
     pnpm install
 }
 
-# 生成 Prisma 客户端
+# 生成 Prisma 客户端（本地构建用）
 generate_prisma() {
     if [ -d "prisma" ]; then
-        log_info "生成 Prisma 客户端..."
+        log_info "生成 Prisma 客户端（本地 macOS 平台）..."
         npx prisma generate
+        log_warn "注意：Prisma 客户端是平台特定的，服务器部署时会自动重新生成 Linux 版本"
     fi
 }
 
@@ -193,6 +194,8 @@ show_next_steps() {
     echo ""
     echo "或者使用交互式菜单:"
     echo -e "   ${BLUE}./server-deploy.sh${NC}"
+    echo ""
+    echo -e "${CYAN}提示：服务器脚本会自动重新生成 Prisma 客户端（Linux 平台）${NC}"
     echo ""
 }
 

@@ -132,65 +132,81 @@ export function canGenerate(user: UserSession | null): {
 }
 
 // 消费点数（生成时调用）
+//
+// 并发安全：付费点数的扣除采用「数据库层原子条件更新」（updateMany + WHERE points >= x），
+// 由数据库对同一行 UPDATE 的串行化保证不会超扣。两个并发请求争抢同一批点数时，
+// 只有一个能满足 WHERE 条件（count=1），另一个 count=0 被拒绝，避免透支。
+// 整个「读→算→写」包裹在单个事务内，balance 快照在事务内重读，保证记录准确。
 export async function consumePoints(userId: string, amount: number = 1): Promise<boolean> {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
-  const user = await prisma.user.findUnique({ where: { id: userId } })
-  if (!user) return false
-
-  const lastUsageDate = new Date(user.lastUsageDate)
-  lastUsageDate.setHours(0, 0, 0, 0)
-  const isNewDay = today.getTime() !== lastUsageDate.getTime()
-
-  // 计算当前的今日已使用免费点数（兼容旧字段）
-  const currentDailyFreeUsed = isNewDay ? 0 : (user.dailyFreeUsed || user.todayUsage)
-
-  // 从数据库获取点数配置
+  // 从数据库获取点数配置（事务外读取，配置变更容忍最终一致）
   const pointsConfig = await getPointsConfig()
 
-  // 计算每日免费次数（使用数据库配置）
-  const isVip = isValidVip(user)
-  const dailyFreeLimit = getDailyFreePointsFromConfig(isVip, pointsConfig)
-  const dailyFreeRemaining = Math.max(0, dailyFreeLimit - currentDailyFreeUsed)
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // 事务内读取最新用户状态
+      const user = await tx.user.findUnique({ where: { id: userId } })
+      if (!user) return false
 
-  // 优先使用每日免费点数，不足部分从购买/兑换的点数扣除
-  let freePointsToUse = Math.min(amount, dailyFreeRemaining)
-  let paidPointsToUse = amount - freePointsToUse
+      const lastUsageDate = new Date(user.lastUsageDate)
+      lastUsageDate.setHours(0, 0, 0, 0)
+      const isNewDay = today.getTime() !== lastUsageDate.getTime()
 
-  // 检查购买/兑换的点数是否足够
-  if (paidPointsToUse > 0 && user.points < paidPointsToUse) {
-    return false // 点数不足
-  }
+      // 计算当前的今日已使用免费点数（兼容旧字段）
+      const currentDailyFreeUsed = isNewDay ? 0 : (user.dailyFreeUsed || user.todayUsage)
 
-  // 更新用户数据
-  await prisma.$transaction(async (tx) => {
-    // 更新用户使用次数和点数
-    await tx.user.update({
-      where: { id: userId },
-      data: {
-        dailyFreeUsed: isNewDay ? freePointsToUse : { increment: freePointsToUse },
-        totalUsage: { increment: amount },
-        lastUsageDate: new Date(),
-        points: paidPointsToUse > 0 ? { decrement: paidPointsToUse } : undefined,
-      },
-    })
+      // 计算每日免费次数（使用数据库配置）
+      const isVip = isValidVip(user)
+      const dailyFreeLimit = getDailyFreePointsFromConfig(isVip, pointsConfig)
+      const dailyFreeRemaining = Math.max(0, dailyFreeLimit - currentDailyFreeUsed)
 
-    // 如果消费了购买/兑换的点数，记录点数变动
-    if (paidPointsToUse > 0) {
-      await tx.pointRecord.create({
+      // 优先使用每日免费点数，不足部分从购买/兑换的点数扣除
+      const freePointsToUse = Math.min(amount, dailyFreeRemaining)
+      const paidPointsToUse = amount - freePointsToUse
+
+      // 原子扣款：付费点数用条件更新保证不透支
+      const updated = await tx.user.updateMany({
+        where: paidPointsToUse > 0
+          ? { id: userId, points: { gte: paidPointsToUse } } // 仅当余额足够才更新
+          : { id: userId },
         data: {
-          userId,
-          type: 'CONSUME',
-          amount: -paidPointsToUse,
-          balance: user.points - paidPointsToUse,
-          description: '生成内容消费',
+          dailyFreeUsed: isNewDay ? freePointsToUse : { increment: freePointsToUse },
+          totalUsage: { increment: amount },
+          lastUsageDate: new Date(),
+          points: paidPointsToUse > 0 ? { decrement: paidPointsToUse } : undefined,
         },
       })
-    }
-  })
 
-  return true
+      // count=0 说明并发下条件未满足（余额不足），扣款失败
+      if (updated.count === 0) {
+        return false
+      }
+
+      // 记录付费点数变动（在事务内重读余额，保证 balance 快照准确）
+      if (paidPointsToUse > 0) {
+        const after = await tx.user.findUnique({
+          where: { id: userId },
+          select: { points: true },
+        })
+        await tx.pointRecord.create({
+          data: {
+            userId,
+            type: 'CONSUME',
+            amount: -paidPointsToUse,
+            balance: after?.points ?? 0,
+            description: '生成内容消费',
+          },
+        })
+      }
+
+      return true
+    })
+  } catch (error) {
+    console.error('consumePoints failed:', error)
+    return false
+  }
 }
 
 // 增加点数（购买或兑换时调用）

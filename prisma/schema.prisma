@@ -36,6 +36,7 @@ model User {
   orders             Order[]
   redemptionRecords  RedemptionRecord[]
   pointRecords       PointRecord[]      // 点数变动记录
+  aiTasks            AiTask[]           // AI 能力任务记录（账号定位/内容规划/标题/评论回复等）
 }
 
 enum MemberType {
@@ -66,6 +67,28 @@ model Generation {
   createdAt DateTime @default(now())
 
   favorites Favorite[]
+}
+
+// AI 能力任务记录表
+// 通用表：承载账号定位、内容规划、爆款标题、评论回复等多能力的输入与输出
+// 输入/输出结构因能力而异，统一以 JSON 存储，结构约束下沉到应用层的能力 schema
+model AiTask {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  capability String  // 能力标识：positioning / planning / titles / comment-reply
+  aiProvider String  // AI 提供商
+
+  input     Json     // 输入参数（因能力而异）
+  output    Json     // 生成结果（因能力而异）
+  cost      Int      @default(0) // 本次消耗点数
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([capability])
+  @@index([createdAt])
 }
 
 // 收藏表
